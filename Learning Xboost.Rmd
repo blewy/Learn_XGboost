@@ -1,0 +1,392 @@
+---
+title: "Tunning XGBoost"
+output: html_notebook
+---
+
+
+teste
+
+
+
+  + fit an xgboost model with arbitrary hyperparameters
+  + evaluate the loss (AUC-ROC) using cross-validation 
+  + plot the training versus testing evaluation metric
+  
+  data from [here]https://www.kaggle.com/c/GiveMeSomeCredit/data
+  
+  tips for the parameters[here]https://www.analyticsvidhya.com/blog/2016/03/complete-guide-parameter-tuning-xgboost-with-codes-python/
+  
+  and more infromation here http://xgboost.readthedocs.io/en/latest/
+  
+## Xgboost Parameters   
+  Here some tips about this model parameters: 
+  
+  * **eta** [default=0.3]
+Analogous to learning rate in GBM. Makes the model more robust by shrinking the weights on each step
+Typical final values to be used: 0.01-0.2
+
+  * **min_child_weight** [default=1]
+Defines the minimum sum of weights of all observations required in a child.
+This is similar to min_child_leaf in GBM but not exactly. This refers to min “sum of weights” of observations while GBM has min “number of observations”.
+Used to control over-fitting. Higher values prevent a model from learning relations which might be highly specific to the particular sample selected for a tree.
+Too high values can lead to under-fitting hence, it should be tuned using CV.
+
+  * **max_depth [default=6]**
+The maximum depth of a tree, same as GBM.
+Used to control over-fitting as higher depth will allow model to learn relations very specific to a particular sample.
+Should be tuned using CV.
+Typical values: 3-10
+
+  * **max_leaf_nodes**
+The maximum number of terminal nodes or leaves in a tree.
+Can be defined in place of max_depth. Since binary trees are created, a depth of ‘n’ would produce a maximum of 2^n leaves.
+If this is defined, GBM will ignore max_depth.
+
+  * **gamma [default=0]**
+A node is split only when the resulting split gives a positive reduction in the loss function. Gamma specifies the minimum loss reduction required to make a split.
+Makes the algorithm conservative. The values can vary depending on the loss function and should be tuned.
+
+  * **max_delta_step [default=0]**
+In maximum delta step we allow each tree’s weight estimation to be. If the value is set to 0, it means there is no constraint. If it is set to a positive value, it can help making the update step more conservative.
+Usually this parameter is not needed, but it might help in logistic regression when class is extremely imbalanced.
+This is generally not used but you can explore further if you wish.
+
+  * **subsample [default=1]**
+Same as the subsample of GBM. Denotes the fraction of observations to be randomly samples for each tree.
+Lower values make the algorithm more conservative and prevents overfitting but too small values might lead to under-fitting.
+Typical values: 0.5-1
+
+  * **colsample_bytree [default=1]**
+Similar to max_features in GBM. Denotes the fraction of columns to be randomly samples for each tree.
+Typical values: 0.5-1
+
+  * **colsample_bylevel [default=1]**
+Denotes the subsample ratio of columns for each split, in each level.
+I don’t use this often because subsample and colsample_bytree will do the job for you. but you can explore further if you feel so.
+
+  * **lambda [default=1]**
+L2 regularization term on weights (analogous to Ridge regression)
+This used to handle the regularization part of XGBoost. Though many data scientists don’t use it often, it should be explored to reduce overfitting.
+
+ *  **alpha [default=0]**
+L1 regularization term on weight (analogous to Lasso regression)
+Can be used in case of very high dimensionality so that the algorithm runs faster when implemented
+scale_pos_weight [default=1]
+A value greater than 0 should be used in case of high class imbalance as it helps in faster convergence.
+
+
+## Objective - Metric Optimization
+
+These parameters are used to define the optimization objective the metric to be calculated at each step.
+
+  * **objective [default=reg:linear]**
+This defines the loss function to be minimized. Mostly used values are:
+    + **binary:logistic** –logistic regression for binary classification, returns predicted probability (not class)
+    + **multi:softmax** –multiclass classification using the softmax objective, returns predicted class (not probabilities)
+you also need to set an additional num_class (number of classes) parameter defining the number of unique classes
+    + **multi:softprob** –same as softmax, but returns predicted probability of each data point belonging to each class.
+
+  * **eval_metric [ default according to objective ]**
+The metric to be used for validation data.
+The default values are rmse for regression and error for classification.
+Typical values are:
+    + **rmse** – root mean square error
+    + **mae** – mean absolute error
+    + **logloss** – negative log-likelihood
+    + **error** – Binary classification error rate (0.5 threshold)
+    + **merror** – Multiclass classification error rate
+    + **mlogloss** – Multiclass logloss
+    + **auc**: Area under the curve
+
+  * **seed [default=0]**
+The random number seed.
+Can be used for generating reproducible results and also for parameter tuning.
+
+## An example with data
+
+
+```{r}
+setwd("~/Documents/Estudos/Projectos DS/Learning_Xgboost")
+library(caret) #important package
+library(xgboost)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+
+# load in the training data
+df_train =read_csv("./GiveMeSomeCredit_data/cs-training.csv")%>% na.omit() %>% 
+  mutate(SeriousDlqin2yrs = factor(SeriousDlqin2yrs,levels = c(0,1),
+                                   labels = c("Failure", "Success")))
+df_train$X1<-NULL
+```
+Lets looks ate the parameters for this model in **caret**.
+```{r}
+modelLookup("xgbTree")
+```
+
+And now set up a nice search grid for hyperparameter tunning.
+```{r}
+#set up the cross-validated hyper-parameter search
+xgb_grid_1 = expand.grid(nrounds = 10, # Boosting Iterations
+                         eta = c(0.01, 0.03),#2/ntrees,  Step size shrinkage used in update to prevents overfitting 
+                         max_depth = c(10,15), #Maximum depth of a tree
+                         gamma = 0,  # Minimum Loss Reduction
+                         subsample = c(0.6), #Subsample ratio of the training instance
+                         colsample_bytree = c(0.8),#Subsample ratio of columns when constructing each tree
+                         min_child_weight = seq(1,10,4) #Minimum Sum of Instance Weight
+                         )
+
+dim(xgb_grid_1)
+xgb_grid_1
+```
+
+These are the parameters for trees in Xgboost, for linear models the parameters are **nrounds**, **lambda**, **alpha**, **eta**.
+
+```{r}
+modelLookup("xgbLinear")
+```
+
+This is just a piece of code that will help caret package to give us some more metric that dont existe on the vanilla version.
+
+```{r}
+
+fiveStats <- function(...) c(twoClassSummary(...), defaultSummary(...))
+fourStats <- function (data, lev = levels(data$obs), model = NULL)
+{
+  
+  accKapp <- postResample(data[, "pred"], data[, "obs"])
+  out <- c(accKapp,
+           sensitivity(data[, "pred"], data[, "obs"], lev[1]),
+           specificity(data[, "pred"], data[, "obs"], lev[2]))
+  names(out)[3:4] <- c("Sens", "Spec")
+  out
+}
+
+
+# pack the training control parameters
+xgb_trcontrol_1 = trainControl(
+  method = "cv",
+  number = 5,
+  verboseIter = TRUE,
+  returnData = FALSE,
+  returnResamp = "all",  # save losses across all models
+  classProbs = TRUE,     # set to TRUE for AUC to be computed
+  summaryFunction = fiveStats,# use custom metrics
+  allowParallel = TRUE
+)
+#xgb_trcontrol_1
+```
+
+```{r, include=FALSE}
+# train the model for each parameter combination in the grid, 
+#   using CV to evaluate
+xgb_train_1 = train(
+  x = as.matrix(df_train %>%
+                  select(-SeriousDlqin2yrs)),
+  y = as.factor(df_train$SeriousDlqin2yrs),
+  trControl = xgb_trcontrol_1,
+  tuneGrid = xgb_grid_1,
+  method = "xgbTree",
+  verbose=T,
+  metric="Kappa",
+  nthread =4
+)
+
+```
+
+```{r}
+xgb_train_1
+```
+
+```{r}
+plot(xgb_train_1)
+```
+
+```{r}
+fit_results<-as.data.frame(xgb_train_1$results)
+fit_results
+```
+
+
+# Lets Try some random search 
+
+
+```{r}
+# pack the training control parameters
+xgb_trcontrol_2 = trainControl(
+  method = "cv",
+  number = 3,
+  verboseIter = TRUE,
+  returnData = FALSE,
+  returnResamp = "all",  # save losses across all models
+  classProbs = TRUE,     # set to TRUE for AUC to be computed
+  summaryFunction = fiveStats, # use custom metrics
+  search = "random" # Random Search parameter
+)
+```
+
+
+```{r}
+xgb_train_2 = train(
+  x = as.matrix(df_train %>%
+                  select(-SeriousDlqin2yrs)),
+  y = as.factor(df_train$SeriousDlqin2yrs),
+  trControl = xgb_trcontrol_2,
+  tuneLength = 3,
+  method = "xgbTree",
+  verbose=T,
+  metric="Kappa",
+  nthread =4
+)
+
+```
+
+
+```{r}
+fit_results2<-as.data.frame(xgb_train_2$results)
+fit_results2
+```
+
+
+# Using xgboost package
+
+
+Setting up a search grid.
+```{r}
+searchGrid  <- expand.grid(eval_metric = "auc",
+                           objective = "binary:logistic", 
+                           boster = "gbtree",
+                           max.depth = c(5,10,15), #Maximum depth of a tree
+                           eta = c(0.01,0.5,1),#2/ntrees,  Step size shrinkage used in update to prevents overfitting 
+                           gamma=0,  # Minimum loss reduction required to make a split
+                           lambda=0, # L2 regularization term on weights
+                           alpha=0 , # L1 regularization term on weights
+                           subsample = c(0.5), #Subsample ratio of the training instance
+                           colsample_bytree = 0.6, #Subsample ratio of columns when constructing each tree
+                           print.every_n = 25,
+                           early_stopping_rounds=10,
+                           showsd = TRUE, 
+                           stratified=TRUE,
+                           maximize=TRUE
+)
+
+searchGrid
+```
+
+Noew we loop trougth the grid to find best crossvalidation results and save the best model.
+```{r}
+best_param = list()
+best_seednumber = 1234
+best_auc = 0
+best_auc_iteration = 0
+cv.nfold<-5
+cv.nround<-10
+best_index<-0
+
+for(i in 1:nrow(searchGrid)){
+  param <- list(eval_metric= searchGrid[i,"eval_metric"],
+                objective = searchGrid[i,"objective"],
+                boster = searchGrid[i,"boster"],
+                max.depth =searchGrid[i,"max.depth"],  
+                eta =searchGrid[i,"eta"], 
+                gamma=searchGrid[i,"gamma"],  
+                lambda=searchGrid[i,"lambda"],  
+                alpha=searchGrid[i,"alpha"],  
+                subsample = searchGrid[i,"subsample"],  
+                colsample_bytree = searchGrid[i,"colsample_bytree"], 
+                print.every_n = searchGrid[i,"print.every_n"],
+                early_stopping_rounds=searchGrid[i,"early_stopping_rounds"],
+                showsd = searchGrid[i,"showsd"],
+                stratified= searchGrid[i,"stratified"],
+                maximize= searchGrid[i,"maximize"]
+                )
+  
+  cat("\n"," ---------- Iteration :", i,"---- \n")
+  
+seed.number = sample.int(10000, 1)[[1]]
+set.seed(seed.number)
+  
+mdcv <- xgb.cv(data = as.matrix(df_train %>% select(-SeriousDlqin2yrs)),
+               label = (as.numeric(df_train$SeriousDlqin2yrs)-1),
+               params = param, 
+               nthread=6, 
+               nfold=cv.nfold, 
+               nrounds=cv.nround,
+               verbose = T, 
+               maximize=TRUE) 
+
+current_auc= max(mdcv$evaluation_log[,test_auc_mean])
+max_auc_index = which.max(mdcv$evaluation_log[,test_auc_mean])
+
+  if (current_auc > best_auc) 
+      {
+        best_auc = current_auc
+        best_seednumber = seed.number
+        best_param = param
+        best_auc_iteration=max_auc_index
+        best_index<-i
+    }
+}
+```
+
+Best AUC.
+```{r}
+best_auc
+
+```
+Seeh for the best result to be able to reproduce results
+```{r}
+best_seednumber
+
+```
+Best parameters
+```{r}
+best_param
+
+```
+Best Iteration (rounds)
+```{r}
+best_auc_iteration
+
+```
+
+And the best conbination on the grid
+```{r}
+
+searchGrid[best_index,]
+```
+
+
+And now to make predictions the train the model using the best parameters.
+
+```{r}
+train.data <- xgb.DMatrix(data=as.matrix(df_train %>% select(-SeriousDlqin2yrs)), 
+                          label = (as.numeric(df_train$SeriousDlqin2yrs)-1) )
+
+set.seed(best_seednumber)
+bst.model <- xgb.train(params = best_param,
+                       data = train.data,
+                       nrounds = best_auc_iteration, 
+                       prediction = T)
+
+```
+And make some predictions:
+
+```{r}
+ypred = predict(bst.model, as.matrix(df_train %>% select(-SeriousDlqin2yrs)))
+
+```
+And of course take a peak at the variable importance.
+```{r}
+names <- dimnames(as.matrix(df_train %>% select(-SeriousDlqin2yrs)))[[2]]
+importance_matrix<- xgb.importance(names,model = bst.model)
+
+# Nice graph
+xgb.plot.importance(importance_matrix[1:10,])
+```
+
+
+
+
+
