@@ -3,14 +3,9 @@ title: "Tunning XGBoost"
 output: html_notebook
 ---
 
-
-teste
-
-
-
-  + fit an xgboost model with arbitrary hyperparameters
-  + evaluate the loss (AUC-ROC) using cross-validation 
-  + plot the training versus testing evaluation metric
+  + fit an xgboost model with arbitrary and random hyperparameters
+  + evaluate the loss (AUC-ROC) using cross-validation using xgboost package and caret
+  + plot the training versus testing evaluation metrics
   
   data from [here]https://www.kaggle.com/c/GiveMeSomeCredit/data
   
